@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { Water } from "three/addons/objects/Water.js";
 import { Sky } from "three/addons/objects/Sky.js";
 import { MultiplayerManager } from "./MultiplayerManager";
+import { getPersistedCaptainName, persistCaptainName, generateRandomCaptainName } from "./CaptainIdentity";
 
 /* ═══════════════════════════════════════════════════════
    PROCEDURAL NAVAL AUDIO ENGINE (Web Audio API)
@@ -454,13 +455,22 @@ export default function BoatGame() {
   const navigate = useNavigate();
 
   // ── Player Identity & Game Mode State ──
-  const [playerName, setPlayerName] = useState(() => localStorage.getItem("tide_captain_name") || "Captain Alex");
-  const [opponentName, setOpponentName] = useState("Corsair AI");
+  const [playerName, setPlayerName] = useState(() => getPersistedCaptainName());
   const [gameMode, setGameMode] = useState("online_2p"); // "online_2p" | "local_2p" | "vs_ai"
-  const [roomCode, setRoomCode] = useState("SEA1");
+  const [opponentName, setOpponentName] = useState(() => (gameMode === "vs_ai" ? "Corsair AI" : "Waiting for Opponent..."));
+  const [roomCode, setRoomCode] = useState(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      return (p.get("room") || "SEA1").toUpperCase().trim();
+    } catch (e) {
+      return "SEA1";
+    }
+  });
+  const [myRole, setMyRole] = useState("p1"); // "p1" | "p2"
   const [isHost, setIsHost] = useState(true);
   const [isLobbyOpen, setIsLobbyOpen] = useState(false);
-  const [netStatusText, setNetStatusText] = useState("Connecting P2P / Cross-Tab...");
+  const [netStatusText, setNetStatusText] = useState("Connecting in-memory room...");
+  const [inviteCopied, setInviteCopied] = useState(false);
 
   // Match and Audio States
   const [isMuted, setIsMuted] = useState(true);
@@ -470,6 +480,12 @@ export default function BoatGame() {
   const [matchStats, setMatchStats] = useState({ shotsFired: 0, hitsLanded: 0, timeSec: 0 });
 
   // Refs for 60fps loop access
+  const playerNameRef = useRef(playerName);
+  playerNameRef.current = playerName;
+  const opponentNameRef = useRef(opponentName);
+  opponentNameRef.current = opponentName;
+  const myRoleRef = useRef("p1");
+  myRoleRef.current = myRole;
   const soundSysRef = useRef(null);
   const netManagerRef = useRef(null);
   const cameraModeRef = useRef("chase");
@@ -483,12 +499,12 @@ export default function BoatGame() {
   const isHostRef = useRef(isHost);
   isHostRef.current = isHost;
 
-  // Remote Player 2 networked state container
+  // Remote Player networked state container
   const remoteP2Ref = useRef({
-    x: 20, y: 0.45, z: 160,
+    x: 0, y: 0.45, z: 160,
     heading: Math.PI, speed: 0,
     roll: 0, pitch: 0,
-    hp: 100, lastUpdate: Date.now(),
+    hp: 100, lastUpdate: 0,
   });
 
   // Remote queue for incoming fired bullets
@@ -507,9 +523,32 @@ export default function BoatGame() {
   // Handle name change from lobby
   const handleSaveCaptain = (e) => {
     if (e) e.preventDefault();
-    localStorage.setItem("tide_captain_name", playerName);
+    persistCaptainName(playerName);
+    playerNameRef.current = playerName;
     setIsLobbyOpen(false);
     if (window.__updatePlayerName) window.__updatePlayerName(playerName);
+  };
+
+  const handleRandomizeName = () => {
+    const fresh = generateRandomCaptainName();
+    setPlayerName(fresh);
+    persistCaptainName(fresh);
+    playerNameRef.current = fresh;
+    if (window.__updatePlayerName) window.__updatePlayerName(fresh);
+  };
+
+  const handleCopyInviteLink = () => {
+    const inviteUrl = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(inviteUrl).then(() => {
+        setInviteCopied(true);
+        setTimeout(() => setInviteCopied(false), 2400);
+      }).catch(() => {
+        prompt("Copy this invite link to share with Player 2:", inviteUrl);
+      });
+    } else {
+      prompt("Copy this invite link to share with Player 2:", inviteUrl);
+    }
   };
 
   const handleRestartMatch = () => {
@@ -881,6 +920,9 @@ export default function BoatGame() {
           dir = fwd.clone().add(new THREE.Vector3(spreadX, spreadY, spreadZ)).normalize();
         }
 
+        const localOwner = myRoleRef.current;
+        const bOwner = isRed ? (localOwner === "p1" ? "p2" : "p1") : localOwner;
+
         const bData = {
           x: barrelOrigin.x,
           y: barrelOrigin.y,
@@ -889,12 +931,12 @@ export default function BoatGame() {
           vy: dir.y * bSpeed,
           vz: dir.z * bSpeed,
           life: 1.6,
-          owner: isRed ? "p2" : "p1",
+          owner: bOwner,
         };
         bullets.push(bData);
 
-        // Broadcast fired bullet to online opponent
-        if (netManagerRef.current && gameModeRef.current === "online_2p" && ((isHostRef.current && !isRed) || (!isHostRef.current && isRed))) {
+        // Broadcast fired bullet to online opponent whenever local player fires
+        if (netManagerRef.current && gameModeRef.current === "online_2p" && !isRed) {
           netManagerRef.current.sendFire(bData);
         }
       });
@@ -910,13 +952,22 @@ export default function BoatGame() {
        10. MULTIPLAYER NETWORKING INITIALIZATION
        ═══════════════════════════════════════════════════ */
     const netManager = new MultiplayerManager({
-      playerName,
+      playerName: playerNameRef.current,
       roomCode,
       isHost,
+      onRoleAssigned: ({ role, isHost: assignedHost }) => {
+        setMyRole(role);
+        setIsHost(assignedHost);
+        myRoleRef.current = role;
+        isHostRef.current = assignedHost;
+        if (window.__handleRoleAssigned) window.__handleRoleAssigned(role);
+      },
       onPeerJoined: (peerInfo) => {
-        setOpponentName(peerInfo.name || "Player 2");
+        const opp = peerInfo.name || "Player 2";
+        setOpponentName(opp);
+        opponentNameRef.current = opp;
         const np = opponentBoat.getObjectByName("nameplate");
-        if (np && np.userData.updateNameAndHp) np.userData.updateNameAndHp(peerInfo.name, 100);
+        if (np && np.userData.updateNameAndHp) np.userData.updateNameAndHp(opp, 100);
       },
       onRemoteState: (state) => {
         remoteP2Ref.current = {
@@ -928,7 +979,8 @@ export default function BoatGame() {
       },
       onRemoteFire: (bData) => {
         if (bullets.length < MAX_BULLETS) {
-          bullets.push({ ...bData, life: 1.6 });
+          const oppRole = myRoleRef.current === "p1" ? "p2" : "p1";
+          bullets.push({ ...bData, life: 1.6, owner: oppRole });
           opponentBoat.traverse((child) => {
             if (child.name === "muzzleFlash") child.material.opacity = 1.0;
           });
@@ -936,16 +988,20 @@ export default function BoatGame() {
         }
       },
       onRemoteHit: (hitData) => {
-        // Opponent notified us that our hit landed
         playerHitsLanded++;
       },
       onRematch: () => {
         if (window.__resetNavalBattle) window.__resetNavalBattle();
       },
-      onStatusChange: ({ state, message, remoteName }) => {
+      onStatusChange: ({ state, message, remoteName, role }) => {
         setNetStatusText(message);
+        if (role) {
+          setMyRole(role);
+          myRoleRef.current = role;
+        }
         if (remoteName && remoteName !== "Waiting for Player 2...") {
           setOpponentName(remoteName);
+          opponentNameRef.current = remoteName;
         }
       },
     });
@@ -1008,17 +1064,28 @@ export default function BoatGame() {
     let matchClock = 0;
     let netSyncTimer = 0;
 
+    window.__handleRoleAssigned = (assignedRole) => {
+      // If assigned role is p2 and match is just beginning, reposition local boat to p2 side!
+      if (assignedRole === "p2" && matchClock < 1.8) {
+        playerX = 0; playerZ = 160; playerHeading = Math.PI;
+        playerBoat.position.set(0, 0.45, 160);
+        playerBoat.rotation.set(0, Math.PI, 0);
+
+        p2X = 0; p2Z = 0; p2Heading = 0;
+        opponentBoat.position.set(0, 0.45, 0);
+        opponentBoat.rotation.set(0, 0, 0);
+      }
+    };
+
     window.__resetNavalBattle = () => {
-      playerSpeed = 0; playerHeading = 0;
-      playerX = 0; playerZ = 0;
+      playerSpeed = 0;
       playerPitch = 0; playerRoll = 0;
       playerHealth = 100;
       playerShotsFired = 0; playerHitsLanded = 0;
       playerHitCooldown = 0; timeSincePlayerHit = 0;
       lastRamTime = 0;
 
-      p2Speed = 0; p2Heading = Math.PI;
-      p2X = 20; p2Z = 160;
+      p2Speed = 0;
       p2Pitch = 0; p2Roll = 0;
       p2Health = 100;
       p2BurstCount = 0; p2BurstPause = 0;
@@ -1026,15 +1093,23 @@ export default function BoatGame() {
       matchClock = 0;
       bullets.length = 0;
 
-      playerBoat.position.set(0, 0.45, 0);
-      playerBoat.rotation.set(0, 0, 0);
-      opponentBoat.position.set(20, 0.45, 160);
-      opponentBoat.rotation.set(0, Math.PI, 0);
+      if (myRoleRef.current === "p2") {
+        playerX = 0; playerZ = 160; playerHeading = Math.PI;
+        p2X = 0; p2Z = 0; p2Heading = 0;
+      } else {
+        playerX = 0; playerZ = 0; playerHeading = 0;
+        p2X = 0; p2Z = 160; p2Heading = Math.PI;
+      }
+
+      playerBoat.position.set(playerX, 0.45, playerZ);
+      playerBoat.rotation.set(0, playerHeading, 0);
+      opponentBoat.position.set(p2X, 0.45, p2Z);
+      opponentBoat.rotation.set(0, p2Heading, 0);
 
       const np1 = playerBoat.getObjectByName("nameplate");
-      if (np1 && np1.userData.updateNameAndHp) np1.userData.updateNameAndHp(playerName, 100);
+      if (np1 && np1.userData.updateNameAndHp) np1.userData.updateNameAndHp(playerNameRef.current, 100);
       const np2 = opponentBoat.getObjectByName("nameplate");
-      if (np2 && np2.userData.updateNameAndHp) np2.userData.updateNameAndHp(opponentName, 100);
+      if (np2 && np2.userData.updateNameAndHp) np2.userData.updateNameAndHp(opponentNameRef.current, 100);
     };
 
     const TOP_CRUISE_SPEED = 42;
@@ -1318,11 +1393,15 @@ export default function BoatGame() {
           continue;
         }
 
-        // Bullet from Player 1 vs Boat 2 (Opponent)
-        if (b.owner === "p1" && p2Health > 0) {
+        const localRole = myRoleRef.current; // 'p1' or 'p2'
+        const oppRole = localRole === "p1" ? "p2" : "p1";
+        const PVP_BULLET_DAMAGE = 3.5;
+
+        // Bullet fired by local player hitting opponent boat
+        if (b.owner === localRole && p2Health > 0) {
           const dToOpponent = Math.hypot(b.x - p2X, b.z - p2Z);
           if (dToOpponent < 4.2 && b.y > -0.5 && b.y < 3.2) {
-            p2Health = Math.max(0, p2Health - 5);
+            p2Health = Math.max(0, p2Health - PVP_BULLET_DAMAGE);
             playerHitsLanded++;
             spawnSparks(b.x, b.y, b.z, 12);
             if (soundSysRef.current) soundSysRef.current.playHit();
@@ -1345,11 +1424,12 @@ export default function BoatGame() {
           }
         }
 
-        // Bullet from Boat 2 vs Player 1
-        if (b.owner === "p2" && playerHealth > 0) {
+        // Bullet fired by opponent hitting local player boat
+        if (b.owner === oppRole && playerHealth > 0) {
           const dToP1 = Math.hypot(b.x - playerX, b.z - playerZ);
           if (dToP1 < 4.2 && b.y > -0.5 && b.y < 3.2) {
-            playerHealth = Math.max(0, playerHealth - 1.5);
+            const incomingDmg = gameModeRef.current === "vs_ai" ? 1.5 : PVP_BULLET_DAMAGE;
+            playerHealth = Math.max(0, playerHealth - incomingDmg);
             timeSincePlayerHit = 0;
             spawnSparks(b.x, b.y, b.z, 10);
             if (soundSysRef.current) soundSysRef.current.playHit();
@@ -1388,9 +1468,9 @@ export default function BoatGame() {
 
       // Update Overhead 3D Nameplates
       const np1 = playerBoat.getObjectByName("nameplate");
-      if (np1 && np1.userData.updateNameAndHp) np1.userData.updateNameAndHp(playerName, playerHealth);
+      if (np1 && np1.userData.updateNameAndHp) np1.userData.updateNameAndHp(playerNameRef.current, playerHealth);
       const np2 = opponentBoat.getObjectByName("nameplate");
-      if (np2 && np2.userData.updateNameAndHp) np2.userData.updateNameAndHp(opponentName, p2Health);
+      if (np2 && np2.userData.updateNameAndHp) np2.userData.updateNameAndHp(opponentNameRef.current, p2Health);
 
       // Sinking effect on defeat
       if (p2Health <= 0) {
@@ -1530,9 +1610,28 @@ export default function BoatGame() {
           </button>
 
           <div className="mp-status-badge">
-            <span className={`mp-status-dot ${gameMode === "online_2p" ? "" : "mp-status-dot--waiting"}`}></span>
-            <span>{gameMode === "online_2p" ? `ROOM: ${roomCode}` : gameMode === "local_2p" ? "LOCAL 2P" : "VS AI"}</span>
+            <span className={`mp-status-dot ${gameMode === "online_2p" && opponentName !== "Waiting for Opponent..." ? "" : "mp-status-dot--waiting"}`}></span>
+            <span>
+              {gameMode === "online_2p"
+                ? (opponentName !== "Waiting for Opponent..."
+                    ? `LIVE DUEL (${myRole.toUpperCase()})`
+                    : `ROOM: ${roomCode} • WAITING FOR P2`)
+                : gameMode === "local_2p"
+                ? "LOCAL 2P"
+                : "VS AI"}
+            </span>
           </div>
+
+          {gameMode === "online_2p" && (
+            <button
+              type="button"
+              className={`btn-invite-link ${inviteCopied ? "copied" : ""}`}
+              onClick={handleCopyInviteLink}
+              title="Copy room invite link to share with Player 2"
+            >
+              {inviteCopied ? "✓ Link Copied!" : "📋 Copy Invite"}
+            </button>
+          )}
 
           <div className="stat-pill">
             <span className="stat-label">HEADING</span>
@@ -1734,16 +1833,26 @@ export default function BoatGame() {
             <form onSubmit={handleSaveCaptain} className="lobby-input-section">
               <div className="lobby-field">
                 <label className="lobby-label" htmlFor="captain-name">YOUR CAPTAIN NAME</label>
-                <input
-                  id="captain-name"
-                  type="text"
-                  className="lobby-input"
-                  placeholder="e.g. Captain Drake"
-                  value={playerName}
-                  onChange={(e) => setPlayerName(e.target.value)}
-                  maxLength={18}
-                  required
-                />
+                <div className="room-input-wrap">
+                  <input
+                    id="captain-name"
+                    type="text"
+                    className="lobby-input"
+                    placeholder="e.g. Captain Drake"
+                    value={playerName}
+                    onChange={(e) => setPlayerName(e.target.value)}
+                    maxLength={28}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="btn-randomize"
+                    onClick={handleRandomizeName}
+                    title="Generate Random Captain Name"
+                  >
+                    🎲 Random
+                  </button>
+                </div>
               </div>
 
               <div className="lobby-field">
@@ -1756,7 +1865,7 @@ export default function BoatGame() {
                   >
                     <span className="mode-pill-icon">🌐</span>
                     <span className="mode-pill-title">ONLINE 2P</span>
-                    <span className="mode-pill-desc">P2P Cross-Tab/Net</span>
+                    <span className="mode-pill-desc">Cross-Laptop LAN</span>
                   </button>
 
                   <button
@@ -1783,7 +1892,7 @@ export default function BoatGame() {
 
               {gameMode === "online_2p" && (
                 <div className="lobby-field">
-                  <label className="lobby-label" htmlFor="room-code">ROOM CODE (SHARE WITH FRIEND)</label>
+                  <label className="lobby-label" htmlFor="room-code">ROOM CODE (SAME ON BOTH LAPTOPS)</label>
                   <div className="room-input-wrap">
                     <input
                       id="room-code"
@@ -1796,13 +1905,15 @@ export default function BoatGame() {
                     />
                     <button
                       type="button"
-                      className="hud-link-btn hud-link-btn--outline"
-                      onClick={() => setIsHost(!isHost)}
-                      title="Toggle Host or Guest"
+                      className={`btn-invite-link ${inviteCopied ? "copied" : ""}`}
+                      onClick={handleCopyInviteLink}
                     >
-                      {isHost ? "Role: P1 (Host)" : "Role: P2 (Guest)"}
+                      {inviteCopied ? "✓ Copied!" : "📋 Invite Link"}
                     </button>
                   </div>
+                  <span className="lobby-label" style={{fontSize: "0.58rem", opacity: 0.55, marginTop: 2}}>
+                    Role auto-assigned by server • Currently: {myRole.toUpperCase()}
+                  </span>
                 </div>
               )}
 

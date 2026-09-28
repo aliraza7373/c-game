@@ -1182,10 +1182,15 @@ button:focus-visible, a:focus-visible { outline: 2px solid #d8fff5; outline-offs
   opacity: 0.7;
 }
 
-/* Room code row */
 .room-input-wrap {
   display: flex;
   gap: 10px;
+  align-items: center;
+}
+
+.room-input-wrap .lobby-input {
+  flex: 1;
+  min-width: 0;
 }
 
 .room-input {
@@ -1271,4 +1276,50 @@ button:focus-visible, a:focus-visible { outline: 2px solid #d8fff5; outline-offs
   transform: translateY(-1px);
 }
 
+.btn-invite-link {
+  background: rgba(0, 245, 212, 0.12);
+  border: 1px solid rgba(0, 245, 212, 0.45);
+  border-radius: 99px;
+  color: #00f5d4;
+  font-family: "DM Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 
+.btn-invite-link:hover {
+  background: rgba(0, 245, 212, 0.25);
+  border-color: #00f5d4;
+  transform: translateY(-1px);
+  box-shadow: 0 0 12px rgba(0, 245, 212, 0.35);
+}
+
+.btn-invite-link.copied {
+  background: #00f5d4;
+  color: #022038;
+  border-color: #00f5d4;
+}
+
+.btn-randomize {
+  background: transparent;
+  border: 1px dashed rgba(0, 245, 212, 0.45);
+  border-radius: 99px;
+  color: #00f5d4;
+  font-family: "DM Mono", monospace;
+  font-size: 0.64rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-randomize:hover {
+  background: rgba(0, 245, 212, 0.18);
+  border-style: solid;
+  border-color: #00f5d4;
+}
