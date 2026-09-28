@@ -1323,3 +1323,42 @@ button:focus-visible, a:focus-visible { outline: 2px solid #d8fff5; outline-offs
   border-style: solid;
   border-color: #00f5d4;
 }
+
+/* Peer Joined Toast Alert */
+.peer-joined-toast {
+  position: fixed;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(2, 28, 48, 0.92);
+  border: 1.5px solid #00f5d4;
+  backdrop-filter: blur(14px);
+  color: #00f5d4;
+  font-family: "DM Mono", monospace;
+  font-size: 0.88rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 10px 26px;
+  border-radius: 99px;
+  box-shadow: 0 0 30px rgba(0, 245, 212, 0.45);
+  z-index: 999;
+  animation: toastBounce 0.4s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+}
+
+@keyframes toastBounce {
+  from { opacity: 0; transform: translate(-50%, -24px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.join-modal-card {
+  max-width: 460px;
+  border: 1px solid rgba(0, 245, 212, 0.5);
+  box-shadow: 0 0 50px rgba(0, 245, 212, 0.25);
+}
+
+.room-highlight {
+  color: #00f5d4;
+  letter-spacing: 0.1em;
+  font-family: "DM Mono", monospace;
+}
+

@@ -374,6 +374,27 @@ export class MultiplayerManager {
     }
   }
 
+  updatePlayerName(newName) {
+    if (!newName || !newName.trim()) return;
+    this.playerName = newName.trim();
+    if (this.useServerRelay) {
+      fetch("/api/naval/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          roomId: this.roomCode,
+          playerName: this.playerName,
+          role: this.myRole,
+        }),
+      }).catch(() => {});
+    }
+    this.send({
+      type: "handshake",
+      role: this.myRole,
+      name: this.playerName,
+    });
+  }
+
   destroy() {
     this.isDestroyed = true;
     if (this.serverSyncTimer) {

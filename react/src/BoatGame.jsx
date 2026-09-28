@@ -469,8 +469,30 @@ export default function BoatGame() {
   const [myRole, setMyRole] = useState("p1"); // "p1" | "p2"
   const [isHost, setIsHost] = useState(true);
   const [isLobbyOpen, setIsLobbyOpen] = useState(false);
+  const [isJoinModalOpen, setIsJoinModalOpen] = useState(() => {
+    try {
+      return Boolean(new URLSearchParams(window.location.search).get("room"));
+    } catch (e) {
+      return false;
+    }
+  });
+  const [peerNotification, setPeerNotification] = useState(null);
   const [netStatusText, setNetStatusText] = useState("Connecting in-memory room...");
   const [inviteCopied, setInviteCopied] = useState(false);
+
+  // Live public tunnel URL reference (fallback if playing from localhost)
+  const publicShareUrlRef = useRef("https://cork-floyd-anymore-remained.trycloudflare.com");
+
+  useEffect(() => {
+    fetch("/api/naval/config")
+      .then((r) => r.json())
+      .then((cfg) => {
+        if (cfg && cfg.publicUrl) {
+          publicShareUrlRef.current = cfg.publicUrl;
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Match and Audio States
   const [isMuted, setIsMuted] = useState(true);
@@ -529,6 +551,17 @@ export default function BoatGame() {
     if (window.__updatePlayerName) window.__updatePlayerName(playerName);
   };
 
+  const handleEnterBattle = (e) => {
+    if (e) e.preventDefault();
+    persistCaptainName(playerName);
+    playerNameRef.current = playerName;
+    setIsJoinModalOpen(false);
+    if (window.__updatePlayerName) window.__updatePlayerName(playerName);
+    if (soundSysRef.current && !soundSysRef.current.initialized) {
+      soundSysRef.current.init();
+    }
+  };
+
   const handleRandomizeName = () => {
     const fresh = generateRandomCaptainName();
     setPlayerName(fresh);
@@ -538,16 +571,20 @@ export default function BoatGame() {
   };
 
   const handleCopyInviteLink = () => {
-    const inviteUrl = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+    let baseOrigin = window.location.origin;
+    if (baseOrigin.includes("localhost") && publicShareUrlRef.current) {
+      baseOrigin = publicShareUrlRef.current;
+    }
+    const inviteUrl = `${baseOrigin}${window.location.pathname}?room=${roomCode}`;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(inviteUrl).then(() => {
         setInviteCopied(true);
         setTimeout(() => setInviteCopied(false), 2400);
       }).catch(() => {
-        prompt("Copy this invite link to share with Player 2:", inviteUrl);
+        prompt("Copy this public invite link to share with your friend:", inviteUrl);
       });
     } else {
-      prompt("Copy this invite link to share with Player 2:", inviteUrl);
+      prompt("Copy this public invite link to share with your friend:", inviteUrl);
     }
   };
 
@@ -966,6 +1003,8 @@ export default function BoatGame() {
         const opp = peerInfo.name || "Player 2";
         setOpponentName(opp);
         opponentNameRef.current = opp;
+        setPeerNotification(`⚓ ${opp.toUpperCase()} ENTERED THE ARENA!`);
+        setTimeout(() => setPeerNotification(null), 4200);
         const np = opponentBoat.getObjectByName("nameplate");
         if (np && np.userData.updateNameAndHp) np.userData.updateNameAndHp(opp, 100);
       },
@@ -988,7 +1027,10 @@ export default function BoatGame() {
         }
       },
       onRemoteHit: (hitData) => {
-        playerHitsLanded++;
+        const dmg = (hitData && hitData.damage) || 3.5;
+        if (window.__applyDamageToPlayer) {
+          window.__applyDamageToPlayer(dmg);
+        }
       },
       onRematch: () => {
         if (window.__resetNavalBattle) window.__resetNavalBattle();
@@ -1054,7 +1096,7 @@ export default function BoatGame() {
 
     // Opponent Boat variables
     let p2Speed = 0, p2Heading = Math.PI;
-    let p2X = 20, p2Z = 160;
+    let p2X = 0, p2Z = 160;
     let p2Pitch = 0, p2Roll = 0;
     let p2Health = 100;
     let p2BoostFuel = 100;
@@ -1064,9 +1106,30 @@ export default function BoatGame() {
     let matchClock = 0;
     let netSyncTimer = 0;
 
+    window.__applyDamageToPlayer = (dmg) => {
+      if (playerHealth <= 0 || matchResultRef.current) return;
+      playerHealth = Math.max(0, playerHealth - dmg);
+      timeSincePlayerHit = 0;
+      spawnSparks(playerX, 2, playerZ, 12);
+      if (soundSysRef.current) soundSysRef.current.playHit();
+      if (damageVignetteRef.current && playerHitCooldown <= 0) {
+        playerHitCooldown = 0.2;
+        damageVignetteRef.current.classList.add("active");
+        setTimeout(() => { if (damageVignetteRef.current) damageVignetteRef.current.classList.remove("active"); }, 120);
+      }
+      if (playerHealth <= 0 && !matchResultRef.current) {
+        matchResultRef.current = "defeat";
+        setMatchResult("defeat");
+        setMatchStats({ shotsFired: playerShotsFired, hitsLanded: playerHitsLanded, timeSec: Math.round(matchClock) });
+        if (soundSysRef.current) soundSysRef.current.playExplosion();
+        spawnSparks(playerX, 2, playerZ, 60);
+      }
+    };
+
+    let hasRepositionedForRole = false;
     window.__handleRoleAssigned = (assignedRole) => {
-      // If assigned role is p2 and match is just beginning, reposition local boat to p2 side!
-      if (assignedRole === "p2" && matchClock < 1.8) {
+      if (assignedRole === "p2" && !hasRepositionedForRole) {
+        hasRepositionedForRole = true;
         playerX = 0; playerZ = 160; playerHeading = Math.PI;
         playerBoat.position.set(0, 0.45, 160);
         playerBoat.rotation.set(0, Math.PI, 0);
@@ -1074,6 +1137,16 @@ export default function BoatGame() {
         p2X = 0; p2Z = 0; p2Heading = 0;
         opponentBoat.position.set(0, 0.45, 0);
         opponentBoat.rotation.set(0, 0, 0);
+      }
+    };
+
+    window.__updatePlayerName = (name) => {
+      if (netManagerRef.current) {
+        netManagerRef.current.updatePlayerName(name);
+      }
+      const np1 = playerBoat.getObjectByName("nameplate");
+      if (np1 && np1.userData.updateNameAndHp) {
+        np1.userData.updateNameAndHp(name, playerHealth);
       }
     };
 
@@ -1405,6 +1478,9 @@ export default function BoatGame() {
             playerHitsLanded++;
             spawnSparks(b.x, b.y, b.z, 12);
             if (soundSysRef.current) soundSysRef.current.playHit();
+            if (netManagerRef.current && gameModeRef.current === "online_2p") {
+              netManagerRef.current.sendHit(PVP_BULLET_DAMAGE);
+            }
 
             if (hitmarkerRef.current) {
               hitmarkerRef.current.classList.add("active");
@@ -1666,6 +1742,13 @@ export default function BoatGame() {
         </div>
       </header>
 
+      {/* ── OPPONENT JOIN NOTIFICATION TOAST ── */}
+      {peerNotification && (
+        <div className="peer-joined-toast">
+          <span>{peerNotification}</span>
+        </div>
+      )}
+
       {/* ── OPPONENT HEALTH BAR (TOP CENTER) ── */}
       <div className="boss-health-bar">
         <div className="boss-header-row">
@@ -1891,30 +1974,52 @@ export default function BoatGame() {
               </div>
 
               {gameMode === "online_2p" && (
-                <div className="lobby-field">
-                  <label className="lobby-label" htmlFor="room-code">ROOM CODE (SAME ON BOTH LAPTOPS)</label>
-                  <div className="room-input-wrap">
-                    <input
-                      id="room-code"
-                      type="text"
-                      className="lobby-input room-input"
-                      placeholder="SEA1"
-                      value={roomCode}
-                      onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                      maxLength={8}
-                    />
-                    <button
-                      type="button"
-                      className={`btn-invite-link ${inviteCopied ? "copied" : ""}`}
-                      onClick={handleCopyInviteLink}
-                    >
-                      {inviteCopied ? "✓ Copied!" : "📋 Invite Link"}
-                    </button>
+                <>
+                  <div className="lobby-field">
+                    <label className="lobby-label" htmlFor="room-code">ROOM CODE (SAME ON BOTH LAPTOPS)</label>
+                    <div className="room-input-wrap">
+                      <input
+                        id="room-code"
+                        type="text"
+                        className="lobby-input room-input"
+                        placeholder="SEA1"
+                        value={roomCode}
+                        onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+                        maxLength={8}
+                      />
+                      <button
+                        type="button"
+                        className={`btn-invite-link ${inviteCopied ? "copied" : ""}`}
+                        onClick={handleCopyInviteLink}
+                      >
+                        {inviteCopied ? "✓ Copied!" : "📋 Invite Link"}
+                      </button>
+                    </div>
+                    <span className="lobby-label" style={{fontSize: "0.58rem", opacity: 0.55, marginTop: 2}}>
+                      Role auto-assigned by server • Currently: {myRole.toUpperCase()}
+                    </span>
                   </div>
-                  <span className="lobby-label" style={{fontSize: "0.58rem", opacity: 0.55, marginTop: 2}}>
-                    Role auto-assigned by server • Currently: {myRole.toUpperCase()}
-                  </span>
-                </div>
+
+                  <div className="lobby-field">
+                    <label className="lobby-label">GLOBAL ONLINE ARENA LINK (SHARE WITH FRIEND)</label>
+                    <div className="room-input-wrap">
+                      <input
+                        type="text"
+                        className="lobby-input"
+                        style={{ fontSize: "0.76rem", color: "#00f5d4", fontFamily: "'DM Mono', monospace" }}
+                        readOnly
+                        value={`${(publicShareUrlRef.current && window.location.origin.includes('localhost')) ? publicShareUrlRef.current : window.location.origin}/game?room=${roomCode}`}
+                      />
+                      <button
+                        type="button"
+                        className={`btn-invite-link ${inviteCopied ? "copied" : ""}`}
+                        onClick={handleCopyInviteLink}
+                      >
+                        {inviteCopied ? "✓ Copied!" : "📋 Copy Link"}
+                      </button>
+                    </div>
+                  </div>
+                </>
               )}
 
               <div className="lobby-actions">
@@ -1930,6 +2035,57 @@ export default function BoatGame() {
                   className="lobby-start-btn"
                 >
                   Save & Enter Duel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── ENTER THE ARENA JOIN MODAL (WHEN JOINING VIA LINK) ── */}
+      {isJoinModalOpen && (
+        <div className="lobby-modal-backdrop">
+          <div className="lobby-modal-card join-modal-card">
+            <span className="lobby-badge">⚔ LIVE MULTIPLAYER DUEL</span>
+            <h2 className="lobby-title">Enter The Naval Arena</h2>
+            <p className="lobby-subtitle">
+              Joining Room <strong className="room-highlight">{roomCode}</strong> • Face off against{" "}
+              <strong>{opponentName !== "Waiting for Opponent..." ? opponentName : "Player 1"}</strong> in real time!
+            </p>
+
+            <form onSubmit={handleEnterBattle} className="lobby-input-section">
+              <div className="lobby-field">
+                <label className="lobby-label" htmlFor="join-captain-name">YOUR CAPTAIN NAME</label>
+                <div className="room-input-wrap">
+                  <input
+                    id="join-captain-name"
+                    type="text"
+                    className="lobby-input"
+                    placeholder="Enter your Captain callsign..."
+                    value={playerName}
+                    onChange={(e) => setPlayerName(e.target.value)}
+                    maxLength={28}
+                    required
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    className="btn-randomize"
+                    onClick={handleRandomizeName}
+                    title="Generate Random Captain Name"
+                  >
+                    🎲 Random
+                  </button>
+                </div>
+              </div>
+
+              <div className="lobby-actions" style={{ marginTop: "20px" }}>
+                <button
+                  type="submit"
+                  className="lobby-start-btn"
+                  style={{ width: "100%", padding: "14px 20px", fontSize: "1.05rem", fontWeight: "800" }}
+                >
+                  🚀 ENTER BATTLE STATIONS
                 </button>
               </div>
             </form>

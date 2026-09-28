@@ -35,6 +35,15 @@ function navalMultiplayerPlugin() {
             return res.end();
           }
 
+          if (req.method === 'GET' && url === '/api/naval/config') {
+            res.statusCode = 200;
+            return res.end(JSON.stringify({
+              publicUrl: 'https://cork-floyd-anymore-remained.trycloudflare.com',
+              activeRooms: rooms.size,
+              timestamp: Date.now()
+            }));
+          }
+
           if (req.method === 'GET' && url === '/api/naval/status') {
             res.statusCode = 200;
             return res.end(JSON.stringify({ activeRooms: rooms.size, timestamp: Date.now() }));
@@ -72,7 +81,16 @@ function navalMultiplayerPlugin() {
                 const p2Alive = room.p2 && (now - room.p2.lastSeen < 12000);
 
                 let assignedRole = 'p1';
-                if (p1Alive && room.p1.name === name) {
+                if (data.role && (data.role === 'p1' || data.role === 'p2')) {
+                  // Explicit existing role preservation (e.g. name update)
+                  assignedRole = data.role;
+                  if (!room[assignedRole]) {
+                    room[assignedRole] = { name, lastSeen: now, hp: 100, x: assignedRole === 'p1' ? 0 : 0, z: assignedRole === 'p1' ? 0 : 160, heading: assignedRole === 'p1' ? 0 : Math.PI, speed: 0, roll: 0, pitch: 0 };
+                  } else {
+                    room[assignedRole].name = name;
+                    room[assignedRole].lastSeen = now;
+                  }
+                } else if (p1Alive && room.p1.name === name) {
                   assignedRole = 'p1';
                   room.p1.lastSeen = now;
                 } else if (p2Alive && room.p2.name === name) {
@@ -183,6 +201,9 @@ function navalMultiplayerPlugin() {
 export default defineConfig({
   plugins: [react(), navalMultiplayerPlugin()],
   server: {
+    port: 5173,
+    strictPort: true,
     host: true, // Listen on all network interfaces (0.0.0.0) so other laptops on Wi-Fi can connect!
+    allowedHosts: true, // Allow tunnels (localtunnel, cloudflare, ngrok) and custom domains
   },
 })
