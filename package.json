@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "dev": "npm --prefix react run dev",
+    "build": "npm --prefix react run build",
+    "preview": "npm --prefix react run preview"
+  },
+  "dependencies": {
+    "react-router-dom": "^7.18.4"
+  }
+}
